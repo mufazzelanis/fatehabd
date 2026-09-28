@@ -1,0 +1,46 @@
+<?php
+
+namespace App\Providers;
+
+use App\Listeners\RecordLoginActivityListener;
+use App\Listeners\RecordLogoutActivityListener;
+use App\Models\Order;
+use App\Observers\OrderObserver;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\Events\Logout;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rules\Password;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        Schema::defaultStringLength(191);
+        Password::defaults(function () {
+            $rule = Password::min(10)->mixedCase()->numbers()->symbols();
+
+            // The breach-corpus check calls an external API (api.pwnedpasswords.com);
+            // skip it outside production so registration/reset never breaks in an
+            // offline dev/test environment, but keep it where it matters most.
+            return $this->app->environment('production') ? $rule->uncompromised() : $rule;
+        });
+
+        Order::observe(OrderObserver::class);
+
+        Event::listen(Login::class, RecordLoginActivityListener::class);
+        Event::listen(Logout::class, RecordLogoutActivityListener::class);
+    }
+}

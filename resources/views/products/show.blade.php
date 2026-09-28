@@ -1,0 +1,643 @@
+@extends('layouts.app')
+@php
+    $seoTitle = $product->meta_title ?: $product->name;
+    $seoDesc  = $product->meta_description ?: $product->short_description;
+    $ogImage  = $product->og_image ?: ($product->image ? Storage::url($product->image) : null);
+    $canonicalUrl = $product->canonical_url ?: route('products.show', $product);
+
+    // robots_meta (the base select) and the noindex/nofollow/nosnippet/noimageindex checkboxes
+    // both exist in the admin SEO form — the checkboxes act as an override layer on top.
+    [$robotsIndex, $robotsFollow] = array_pad(explode(',', $product->robots_meta ?: 'index,follow'), 2, null);
+    $robotsParts = [
+        $product->noindex ? 'noindex' : (trim($robotsIndex ?? '') ?: 'index'),
+        $product->nofollow ? 'nofollow' : (trim($robotsFollow ?? '') ?: 'follow'),
+    ];
+    if ($product->nosnippet) $robotsParts[] = 'nosnippet';
+    if ($product->noimageindex) $robotsParts[] = 'noimageindex';
+    $productRobots = implode(', ', $robotsParts);
+
+    $availabilityMap = [
+        'InStock' => 'https://schema.org/InStock', 'OutOfStock' => 'https://schema.org/OutOfStock',
+        'PreOrder' => 'https://schema.org/PreOrder', 'BackOrder' => 'https://schema.org/BackOrder',
+        'Discontinued' => 'https://schema.org/Discontinued', 'SoldOut' => 'https://schema.org/SoldOut',
+    ];
+    $schemaAvailability = $availabilityMap[$product->schema_availability]
+        ?? ($product->stock > 0 ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock');
+@endphp
+@section('title', $seoTitle)
+@if($seoDesc)@section('meta_description', $seoDesc)@endif
+@if($product->focus_keyword)@section('meta_keywords', $product->focus_keyword)@endif
+@section('canonical', $canonicalUrl)
+@section('og_type', 'product')
+@if($ogImage)@section('og_image', $ogImage)@endif
+@if($product->og_title)@section('og_title', $product->og_title)@endif
+@if($product->og_description)@section('og_description', $product->og_description)@endif
+@section('robots', $productRobots)
+@if($product->twitter_card)@section('twitter_card', $product->twitter_card)@endif
+@if($product->twitter_title)@section('twitter_title', $product->twitter_title)@endif
+@if($product->twitter_description)@section('twitter_description', $product->twitter_description)@endif
+@if($product->twitter_image)@section('twitter_image', $product->twitter_image)@endif
+
+@push('meta')
+{{-- Product-specific Open Graph properties the layout's generic tags don't cover --}}
+<meta property="product:price:amount" content="{{ $product->sale_price ?? $product->price }}">
+<meta property="product:price:currency" content="{{ setting('currency_code', 'BDT') }}">
+@if($product->brand)<meta property="product:brand" content="{{ $product->brand->name }}">@endif
+@if($product->sku)<meta property="product:retailer_item_id" content="{{ $product->sku }}">@endif
+<meta property="product:availability" content="{{ $product->stock > 0 ? 'in stock' : 'out of stock' }}">
+
+{{-- Product structured data --}}
+<script type="application/ld+json">
+{!! json_encode(array_filter([
+    '@context' => 'https://schema.org',
+    '@type' => $product->schema_type ?: 'Product',
+    'name' => $seoTitle,
+    'description' => $seoDesc,
+    'image' => $ogImage ? [$ogImage] : [],
+    'sku' => $product->sku,
+    'gtin' => $product->gtin,
+    'mpn' => $product->mpn,
+    'brand' => $product->brand ? ['@type' => 'Brand', 'name' => $product->brand->name] : null,
+    'countryOfOrigin' => $product->country_of_origin,
+    'offers' => array_filter([
+        '@type' => 'Offer',
+        'url' => $canonicalUrl,
+        'priceCurrency' => setting('currency_code', 'BDT'),
+        'price' => (string) ($product->sale_price ?? $product->price),
+        'priceValidUntil' => $product->price_valid_until?->format('Y-m-d'),
+        'itemCondition' => 'https://schema.org/' . ($product->schema_condition ?: 'NewCondition'),
+        'availability' => $schemaAvailability,
+    ]),
+    'aggregateRating' => $product->reviews->count() > 0 ? [
+        '@type' => 'AggregateRating',
+        'ratingValue' => round($product->average_rating, 1),
+        'reviewCount' => $product->reviews->count(),
+    ] : null,
+], fn ($v) => $v !== null && $v !== ''), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}
+</script>
+
+{{-- Breadcrumb structured data --}}
+<script type="application/ld+json">
+{!! json_encode([
+    '@context' => 'https://schema.org',
+    '@type' => 'BreadcrumbList',
+    'itemListElement' => [
+        ['@type' => 'ListItem', 'position' => 1, 'name' => 'Home', 'item' => route('home')],
+        ['@type' => 'ListItem', 'position' => 2, 'name' => 'Shop', 'item' => route('shop.index')],
+        ['@type' => 'ListItem', 'position' => 3, 'name' => $product->category->name, 'item' => route('shop.category', $product->category->slug)],
+        ['@type' => 'ListItem', 'position' => 4, 'name' => $product->breadcrumb_title ?: $product->name, 'item' => $canonicalUrl],
+    ],
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}
+</script>
+@endpush
+
+@section('content')
+<div class="max-w-7xl mx-auto px-4 py-8">
+    <!-- Breadcrumb -->
+    <div class="flex items-center space-x-2 text-sm text-gray-500 mb-6">
+        <a href="{{ route('home') }}" class="hover:text-indigo-600">Home</a>
+        <span>/</span>
+        <a href="{{ route('shop.index') }}" class="hover:text-indigo-600">Shop</a>
+        <span>/</span>
+        <a href="{{ route('shop.category', $product->category->slug) }}" class="hover:text-indigo-600">{{ $product->category->name }}</a>
+        <span>/</span>
+        <span class="text-gray-900 font-medium line-clamp-1">{{ $product->breadcrumb_title ?: $product->name }}</span>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+        @php
+            $productColorsJs = $product->isVariable() ? $product->colors->map(fn ($c) => [
+                'id' => $c->id, 'name' => $c->name, 'hex_code' => $c->hex_code,
+                'image' => $c->image ? Storage::url($c->image) : null,
+            ]) : collect();
+            $productSizesJs = $product->isVariable() ? $product->sizes->map(fn ($s) => [
+                'id' => $s->id, 'name' => $s->name,
+            ]) : collect();
+            $combinationsJs = $product->isVariable() ? $product->combinations->where('is_active', true)->map(fn ($c) => [
+                'id' => $c->id, 'color_id' => $c->product_color_id, 'size_id' => $c->product_size_id,
+                'sku' => $c->sku, 'price' => $c->price !== null ? (float) $c->price : null, 'stock' => $c->stock,
+            ])->values() : collect();
+            $basePrice = (float) ($product->sale_price ?? $product->price);
+            $comboPrices = $combinationsJs->map(fn ($c) => $c['price'] ?? $basePrice);
+            $priceMin = $comboPrices->isNotEmpty() ? $comboPrices->min() : $basePrice;
+            $priceMax = $comboPrices->isNotEmpty() ? $comboPrices->max() : $basePrice;
+        @endphp
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 p-8"
+            x-data="{
+                active: '{{ $product->image ? Storage::url($product->image) : '' }}',
+                zoomX: 50, zoomY: 50,
+                qty: 1,
+                productColors: {{ Js::from($productColorsJs) }},
+                productSizes: {{ Js::from($productSizesJs) }},
+                combinations: {{ Js::from($combinationsJs) }},
+                selectedColorId: null,
+                selectedSizeId: null,
+                get selectedCombo() {
+                    // A product with no colors never asks for one (selectedColorId stays
+                    // null, matching combo.color_id === null), same for sizes — so this one
+                    // equality check works whether the product uses one dimension, both, or neither.
+                    return this.combinations.find(c =>
+                        c.color_id === this.selectedColorId && c.size_id === this.selectedSizeId
+                    ) || null;
+                },
+                colorAvailable(id) {
+                    return this.combinations.some(c => c.color_id === id && c.stock > 0 &&
+                        (this.selectedSizeId === null || c.size_id === this.selectedSizeId));
+                },
+                sizeAvailable(id) {
+                    return this.combinations.some(c => c.size_id === id && c.stock > 0 &&
+                        (this.selectedColorId === null || c.color_id === this.selectedColorId));
+                },
+                selectColor(color) {
+                    this.selectedColorId = this.selectedColorId === color.id ? null : color.id;
+                    if (color.image) this.active = color.image;
+                },
+                selectSize(size) {
+                    this.selectedSizeId = this.selectedSizeId === size.id ? null : size.id;
+                },
+            }">
+            <!-- Images -->
+            <div>
+                {{-- object-contain (not object-cover) — a source photo can be any shape or
+                     carry its own baked-in margin (most product photos do), and covering a
+                     hard square either crops the product itself or, when the photo already
+                     has whitespace, wrongly zooms into that whitespace. Contain always shows
+                     the whole product at the largest size that fits, whatever the upload's
+                     original dimensions — the padding + soft gradient keep it from looking
+                     like a bare image floating in an empty box. --}}
+                <div class="aspect-square rounded-xl overflow-hidden bg-gradient-to-br from-gray-50 to-gray-100 mb-4 relative group cursor-zoom-in p-6 md:p-10"
+                     @mousemove="zoomX = (($event.offsetX / $event.currentTarget.offsetWidth) * 100).toFixed(2); zoomY = (($event.offsetY / $event.currentTarget.offsetHeight) * 100).toFixed(2)"
+                     @mouseleave="zoomX = 50; zoomY = 50">
+                    <template x-if="active">
+                        <img :src="active" :style="`transform-origin: ${zoomX}% ${zoomY}%`" alt="{{ $product->image_alt ?: $product->name }}" title="{{ $product->image_title ?: $product->name }}" class="w-full h-full object-contain transition-transform duration-300 ease-out group-hover:scale-[1.8]">
+                    </template>
+                    <template x-if="!active">
+                        <div class="w-full h-full flex items-center justify-center">
+                            <svg class="w-24 h-24 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                            </svg>
+                        </div>
+                    </template>
+                </div>
+                @if($product->images->isNotEmpty())
+                    <div class="flex gap-3 overflow-x-auto pb-1">
+                        @if($product->image)
+                            <button @click="active = '{{ Storage::url($product->image) }}'"
+                                class="w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 bg-gray-50 p-1.5 transition-colors"
+                                :class="active === '{{ Storage::url($product->image) }}' ? 'border-indigo-500' : 'border-gray-200 hover:border-indigo-300'">
+                                <img src="{{ Storage::url($product->image) }}" class="w-full h-full object-contain">
+                            </button>
+                        @endif
+                        @foreach($product->images as $img)
+                            <button @click="active = '{{ Storage::url($img->image) }}'"
+                                class="w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 bg-gray-50 p-1.5 transition-colors"
+                                :class="active === '{{ Storage::url($img->image) }}' ? 'border-indigo-500' : 'border-gray-200 hover:border-indigo-300'">
+                                <img src="{{ Storage::url($img->image) }}" class="w-full h-full object-contain">
+                            </button>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+
+            <!-- Product Info -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-indigo-600 text-sm font-medium">
+                        {{ $product->category->name }}
+                        @if($product->brand)
+                            <span class="text-gray-300 mx-1">•</span>
+                            <span class="text-gray-500">{{ $product->brand->name }}</span>
+                        @endif
+                    </span>
+                    @auth
+                        <form action="{{ route('wishlist.toggle', $product->id) }}" method="POST">
+                            @csrf
+                            <button type="submit" class="p-2 rounded-full hover:bg-red-50 transition {{ $wishlisted ? 'text-red-500' : 'text-gray-400' }}">
+                                <svg class="w-6 h-6" fill="{{ $wishlisted ? 'currentColor' : 'none' }}" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+                                </svg>
+                            </button>
+                        </form>
+                    @endauth
+                </div>
+
+                <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-4">{{ $product->name }}</h1>
+
+                <!-- Rating -->
+                <div class="flex items-center space-x-2 mb-4">
+                    <div class="flex">
+                        @for($i = 1; $i <= 5; $i++)
+                            <svg class="w-5 h-5 {{ $i <= round($product->average_rating) ? 'text-yellow-400' : 'text-gray-300' }}" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                            </svg>
+                        @endfor
+                    </div>
+                    <span class="text-sm text-gray-500">({{ $product->reviews->count() }} reviews)</span>
+                </div>
+
+                <!-- Price -->
+                @php $activeFlashSale = $product->activeFlashSaleProduct && $product->activeFlashSaleProduct->isAvailable() ? $product->activeFlashSaleProduct : null; @endphp
+                @if($product->isVariable())
+                    <div class="mb-6">
+                        <template x-if="selectedCombo">
+                            <span class="text-3xl font-bold text-gray-900" x-text="'৳' + Math.round(selectedCombo.price ?? {{ $basePrice }}).toLocaleString()"></span>
+                        </template>
+                        <template x-if="!selectedCombo">
+                            <span class="text-3xl font-bold text-gray-900">
+                                @if($priceMin === $priceMax)
+                                    ৳{{ number_format($priceMin) }}
+                                @else
+                                    ৳{{ number_format($priceMin) }} – ৳{{ number_format($priceMax) }}
+                                @endif
+                            </span>
+                        </template>
+                    </div>
+                @else
+                    <div class="mb-6">
+                        @if($activeFlashSale)
+                            <div class="flex items-center space-x-3">
+                                <span class="text-3xl font-bold text-red-600">৳{{ number_format($product->final_price) }}</span>
+                                <span class="text-xl text-gray-400 line-through">৳{{ number_format($product->effective_price) }}</span>
+                                <span class="bg-red-100 text-red-600 text-sm px-2 py-1 rounded-full font-medium animate-pulse">
+                                    ⚡ Flash Sale
+                                </span>
+                            </div>
+                        @elseif($product->sale_price)
+                            <div class="flex items-center space-x-3">
+                                <span class="text-3xl font-bold text-red-600">৳{{ number_format($product->sale_price) }}</span>
+                                <span class="text-xl text-gray-400 line-through">৳{{ number_format($product->price) }}</span>
+                                <span class="bg-red-100 text-red-600 text-sm px-2 py-1 rounded-full font-medium">
+                                    {{ round((1 - $product->sale_price / $product->price) * 100) }}% off
+                                </span>
+                            </div>
+                        @else
+                            <span class="text-3xl font-bold text-gray-900">৳{{ number_format($product->price) }}</span>
+                        @endif
+                    </div>
+                @endif
+
+                @if($product->isBundle() && $product->bundleItems->isNotEmpty())
+                    <div class="mb-6 border border-indigo-100 bg-indigo-50/50 rounded-xl p-4">
+                        <h3 class="font-semibold text-gray-800 mb-3 text-sm">This bundle includes:</h3>
+                        <ul class="space-y-2">
+                            @foreach($product->bundleItems as $bundleItem)
+                                <li class="flex items-center justify-between text-sm">
+                                    <span class="text-gray-600">{{ $bundleItem->quantity }}× {{ $bundleItem->itemProduct->name }}</span>
+                                    <span class="font-medium text-gray-800">৳{{ number_format($bundleItem->effective_price * $bundleItem->quantity) }}</span>
+                                </li>
+                            @endforeach
+                        </ul>
+                        @php $bundleValue = $product->bundleItems->sum(fn($bi) => $bi->effective_price * $bi->quantity); @endphp
+                        @if($bundleValue > $product->final_price)
+                            <p class="text-xs text-green-600 font-semibold mt-3">
+                                Bundle value ৳{{ number_format($bundleValue) }} — you save ৳{{ number_format($bundleValue - $product->final_price) }}
+                            </p>
+                        @endif
+                    </div>
+                @endif
+
+                @if($product->short_description)
+                    <p class="text-gray-600 mb-6">{{ $product->short_description }}</p>
+                @endif
+
+                @if($product->isVariable())
+                    {{-- Color / Size selection --}}
+                    @if($product->colors->isNotEmpty())
+                        <div class="mb-5">
+                            <p class="text-sm font-medium text-gray-700 mb-2">
+                                Color<template x-if="productColors.find(c => c.id === selectedColorId)">: <span x-text="productColors.find(c => c.id === selectedColorId)?.name"></span></template>
+                            </p>
+                            <div class="flex flex-wrap gap-2">
+                                <template x-for="color in productColors" :key="color.id">
+                                    <button type="button" @click="selectColor(color)"
+                                        :disabled="!colorAvailable(color.id)"
+                                        :class="{
+                                            'ring-2 ring-offset-2 ring-indigo-600': selectedColorId === color.id,
+                                            'opacity-30 cursor-not-allowed': !colorAvailable(color.id),
+                                        }"
+                                        class="w-9 h-9 rounded-full border border-gray-200 flex-shrink-0 transition"
+                                        :style="`background:${color.hex_code || '#ccc'}`"
+                                        :title="color.name"></button>
+                                </template>
+                            </div>
+                        </div>
+                    @endif
+                    @if($product->sizes->isNotEmpty())
+                        <div class="mb-5">
+                            <p class="text-sm font-medium text-gray-700 mb-2">Size</p>
+                            <div class="flex flex-wrap gap-2">
+                                <template x-for="size in productSizes" :key="size.id">
+                                    <button type="button" @click="selectSize(size)"
+                                        :disabled="!sizeAvailable(size.id)"
+                                        :class="selectedSizeId === size.id
+                                            ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                                            : (sizeAvailable(size.id) ? 'border-gray-200 text-gray-700 hover:border-gray-300' : 'border-gray-100 text-gray-300 cursor-not-allowed')"
+                                        class="px-4 py-2 rounded-xl border text-sm font-medium transition"
+                                        x-text="size.name"></button>
+                                </template>
+                            </div>
+                        </div>
+                    @endif
+                    <template x-if="(productColors.length > 0 || productSizes.length > 0) && !selectedCombo">
+                        <p class="text-xs text-amber-600 mb-5">Please select an option above.</p>
+                    </template>
+                @endif
+
+                <!-- Stock -->
+                @if($product->isVariable())
+                    <div class="mb-6">
+                        <template x-if="selectedCombo">
+                            <span class="inline-flex items-center bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
+                                <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                                <span x-text="'In Stock (' + selectedCombo.stock + ' available)'"></span>
+                            </span>
+                        </template>
+                        <template x-if="!selectedCombo">
+                            <span class="inline-flex items-center bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-sm font-medium">
+                                Select an option to see availability
+                            </span>
+                        </template>
+                        <template x-if="selectedCombo && selectedCombo.sku">
+                            <span class="ml-3 text-xs text-gray-400" x-text="'SKU: ' + selectedCombo.sku"></span>
+                        </template>
+                        @if($product->sku)
+                            <template x-if="!(selectedCombo && selectedCombo.sku)">
+                                <span class="ml-3 text-xs text-gray-400">SKU: {{ $product->sku }}</span>
+                            </template>
+                        @endif
+                    </div>
+                @else
+                    <div class="mb-6">
+                        @if($product->available_stock > 0)
+                            <span class="inline-flex items-center bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
+                                <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                                In Stock ({{ $product->available_stock }} available)
+                            </span>
+                        @else
+                            <span class="inline-flex items-center bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-medium">
+                                <span class="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
+                                Out of Stock
+                            </span>
+                        @endif
+                        @if($product->sku)
+                            <span class="ml-3 text-xs text-gray-400">SKU: {{ $product->sku }}</span>
+                        @endif
+                    </div>
+                @endif
+
+                <!-- Add to Cart / Buy Now -->
+                @if($product->isVariable())
+                    @if($product->available_stock > 0)
+                        <form action="{{ route('cart.add') }}" method="POST" class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-6">
+                            @csrf
+                            <input type="hidden" name="product_id" value="{{ $product->id }}">
+                            <input type="hidden" name="variant_combination_id" :value="selectedCombo ? selectedCombo.id : ''">
+                            <div class="flex items-center border border-gray-200 rounded-xl overflow-hidden">
+                                <button type="button" @click="qty = Math.max(1, qty - 1)" class="px-4 py-3 text-gray-500 hover:bg-gray-100 text-lg font-bold">-</button>
+                                <input type="number" name="quantity" x-model.number="qty" min="1" :max="selectedCombo ? selectedCombo.stock : 1"
+                                    class="w-16 text-center py-3 border-0 focus:outline-none text-sm font-semibold">
+                                <button type="button" @click="qty = Math.min(selectedCombo ? selectedCombo.stock : 1, qty + 1)" class="px-4 py-3 text-gray-500 hover:bg-gray-100 text-lg font-bold">+</button>
+                            </div>
+                            <div class="flex-1 flex gap-3">
+                                <button type="submit" formaction="{{ route('cart.add') }}" :disabled="!selectedCombo"
+                                    :class="!selectedCombo ? 'opacity-40 cursor-not-allowed' : 'hover:bg-indigo-50'"
+                                    class="flex-1 bg-white border-2 border-indigo-600 text-indigo-600 py-3 rounded-xl font-semibold transition flex items-center justify-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                                    <span>Add to Cart</span>
+                                </button>
+                                <button type="submit" formaction="{{ route('checkout.buy-now') }}" :disabled="!selectedCombo"
+                                    :class="!selectedCombo ? 'opacity-40 cursor-not-allowed' : 'hover:bg-indigo-700'"
+                                    class="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold transition flex items-center justify-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    <span>{{ setting('buy_now_button_text', 'Buy Now') }}</span>
+                                </button>
+                            </div>
+                        </form>
+                    @endif
+                @else
+                    @if($product->available_stock > 0)
+                        <form action="{{ route('cart.add') }}" method="POST" class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-6">
+                            @csrf
+                            <input type="hidden" name="product_id" value="{{ $product->id }}">
+                            <div class="flex items-center border border-gray-200 rounded-xl overflow-hidden">
+                                <button type="button" onclick="updateQty(-1)" class="px-4 py-3 text-gray-500 hover:bg-gray-100 text-lg font-bold">-</button>
+                                <input type="number" name="quantity" id="qty" value="1" min="1" max="{{ $product->available_stock }}"
+                                    class="w-16 text-center py-3 border-0 focus:outline-none text-sm font-semibold">
+                                <button type="button" onclick="updateQty(1)" class="px-4 py-3 text-gray-500 hover:bg-gray-100 text-lg font-bold">+</button>
+                            </div>
+                            <div class="flex-1 flex gap-3">
+                                <button type="submit" formaction="{{ route('cart.add') }}"
+                                    class="flex-1 bg-white border-2 border-indigo-600 text-indigo-600 py-3 rounded-xl font-semibold hover:bg-indigo-50 transition flex items-center justify-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                                    <span>Add to Cart</span>
+                                </button>
+                                <button type="submit" formaction="{{ route('checkout.buy-now') }}"
+                                    class="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition flex items-center justify-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    <span>{{ setting('buy_now_button_text', 'Buy Now') }}</span>
+                                </button>
+                            </div>
+                        </form>
+                    @endif
+                @endif
+
+                <!-- Meta -->
+                <div class="border-t border-gray-100 pt-6 space-y-3 text-sm text-gray-500">
+                    @if(setting('free_shipping_enabled', '0') == '1')
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                        <span>Free shipping on orders over {{ setting('currency_symbol', '৳') }}{{ number_format((float) setting('free_shipping_min', '999')) }}</span>
+                    </div>
+                    @endif
+                    @if((int) setting('return_days', '7') > 0)
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        <span>{{ setting('return_days', '7') }}-day return policy</span>
+                    </div>
+                    @endif
+                </div>
+            </div>
+        </div>
+
+        <!-- Description + Reviews Tabs -->
+        <div class="border-t border-gray-100 p-8" x-data="{ tab: 'description' }">
+            <div class="flex space-x-6 border-b border-gray-200 mb-6">
+                <button @click="tab = 'description'" :class="tab === 'description' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-gray-500'" class="pb-3 font-medium text-sm">
+                    Description
+                </button>
+                <button @click="tab = 'reviews'" :class="tab === 'reviews' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-gray-500'" class="pb-3 font-medium text-sm">
+                    Reviews ({{ $product->reviews->count() }})
+                </button>
+                @if($product->faqs->count() > 0)
+                    <button @click="tab = 'faq'" :class="tab === 'faq' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-gray-500'" class="pb-3 font-medium text-sm">
+                        FAQs ({{ $product->faqs->count() }})
+                    </button>
+                @endif
+            </div>
+
+            <div x-show="tab === 'description'">
+                <div class="prose prose-sm dark:prose-invert max-w-none text-gray-600">
+                    {!! $product->description ?? 'No description available.' !!}
+                </div>
+            </div>
+
+            <div x-show="tab === 'reviews'" x-cloak>
+                @foreach($product->reviews as $review)
+                    <div class="border-b border-gray-100 pb-6 mb-6 last:border-0">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
+                                    <span class="text-indigo-600 font-semibold text-sm">{{ strtoupper(substr($review->user->name, 0, 1)) }}</span>
+                                </div>
+                                <div>
+                                    <p class="font-semibold text-gray-800 text-sm">{{ $review->user->name }}</p>
+                                    <div class="flex">
+                                        @for($i = 1; $i <= 5; $i++)
+                                            <svg class="w-4 h-4 {{ $i <= $review->rating ? 'text-yellow-400' : 'text-gray-300' }}" fill="currentColor" viewBox="0 0 20 20">
+                                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                            </svg>
+                                        @endfor
+                                    </div>
+                                </div>
+                            </div>
+                            <span class="text-xs text-gray-400">{{ $review->created_at->diffForHumans() }}</span>
+                        </div>
+                        <p class="text-gray-600 text-sm mt-2">{{ $review->comment }}</p>
+                    </div>
+                @endforeach
+
+                @auth
+                    <div class="bg-gray-50 rounded-xl p-6 mt-6">
+                        <h4 class="font-semibold text-gray-800 mb-4">Write a Review</h4>
+                        <form action="{{ route('products.review', $product->slug) }}" method="POST">
+                            @csrf
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Rating</label>
+                                <div class="flex space-x-2" x-data="{ rating: 0 }">
+                                    @for($i = 1; $i <= 5; $i++)
+                                        <label class="cursor-pointer">
+                                            <input type="radio" name="rating" value="{{ $i }}" class="sr-only" @change="rating = {{ $i }}">
+                                            <svg class="w-8 h-8" :class="rating >= {{ $i }} ? 'text-yellow-400' : 'text-gray-300'" fill="currentColor" viewBox="0 0 20 20" @click="rating = {{ $i }}">
+                                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                            </svg>
+                                        </label>
+                                    @endfor
+                                </div>
+                            </div>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Comment</label>
+                                <textarea name="comment" rows="3" placeholder="Share your experience..."
+                                    class="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                            </div>
+                            <button type="submit" class="bg-indigo-600 text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 transition">
+                                Submit Review
+                            </button>
+                        </form>
+                    </div>
+                @else
+                    <div class="text-center py-8 text-gray-500 text-sm">
+                        <a href="{{ route('login') }}" class="text-indigo-600 hover:underline">Login</a> to write a review.
+                    </div>
+                @endauth
+            </div>
+
+            @if($product->faqs->count() > 0)
+                <div x-show="tab === 'faq'" x-cloak>
+                    <div class="space-y-3">
+                        @foreach($product->faqs as $faq)
+                            <div class="border border-gray-200 rounded-xl overflow-hidden" x-data="{ open: false }">
+                                <button @click="open = !open" type="button" class="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 transition">
+                                    <span class="font-medium text-sm text-gray-800">{{ $faq->question }}</span>
+                                    <svg class="w-4 h-4 text-gray-400 flex-shrink-0 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </button>
+                                <div x-show="open" x-cloak x-transition class="px-4 pb-4 text-sm text-gray-600">
+                                    {{ $faq->answer }}
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+        </div>
+    </div>
+
+    <!-- Cross-sells -->
+    @if($product->crossSells->isNotEmpty())
+        <div class="mt-12">
+            <h2 class="text-xl font-bold text-gray-900 mb-6">Frequently Bought Together</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                @foreach($product->crossSells as $rec)
+                    @include('partials.product-card', ['product' => $rec->recommended])
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    <!-- Upsells -->
+    @if($product->upsells->isNotEmpty())
+        <div class="mt-12">
+            <h2 class="text-xl font-bold text-gray-900 mb-6">You May Also Like</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                @foreach($product->upsells as $rec)
+                    @include('partials.product-card', ['product' => $rec->recommended])
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    <!-- Related Products -->
+    @if($related->isNotEmpty())
+        <div class="mt-12">
+            <h2 class="text-xl font-bold text-gray-900 mb-6">Related Products</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                @foreach($related as $relProduct)
+                    @include('partials.product-card', ['product' => $relProduct])
+                @endforeach
+            </div>
+        </div>
+    @endif
+</div>
+
+<script>
+function updateQty(delta) {
+    const input = document.getElementById('qty');
+    const max = parseInt(input.max);
+    const newVal = parseInt(input.value) + delta;
+    input.value = Math.max(1, Math.min(newVal, max));
+}
+</script>
+
+@php $trackedValue = $product->isVariable() ? $priceMin : (float) $product->final_price; @endphp
+<script>
+(function () {
+    var id = {!! Js::from((string) $product->id) !!};
+    var name = {!! Js::from($product->name) !!};
+    var category = {!! Js::from($product->category->name ?? '') !!};
+    var value = {{ $trackedValue }};
+    var currency = {!! Js::from(setting('currency_code', 'BDT')) !!};
+
+    if (typeof fbq === 'function') {
+        // eventID matches the server-side Conversions API call ProductController@show
+        // already fired for this same page view, so Meta merges the pair into one event
+        // instead of double-counting.
+        fbq('track', 'ViewContent', {
+            content_ids: [id], content_type: 'product', content_name: name,
+            content_category: category, value: value, currency: currency,
+        }, { eventID: {!! Js::from($fbViewContentEventId) !!} });
+    }
+    if (typeof gtag === 'function') {
+        gtag('event', 'view_item', {
+            currency: currency, value: value,
+            items: [{ item_id: id, item_name: name, item_category: category, price: value }],
+        });
+    }
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+        event: 'view_item',
+        ecommerce: { currency: currency, value: value, items: [{ item_id: id, item_name: name, item_category: category, price: value }] },
+    });
+})();
+</script>
+@endsection

@@ -1,0 +1,319 @@
+<?php
+
+use App\Models\Language;
+use App\Models\Setting;
+use App\Models\Translation;
+use Illuminate\Support\Facades\Storage;
+
+if (!function_exists('setting')) {
+    function setting(string $key, mixed $default = null): mixed
+    {
+        return Setting::get($key, $default);
+    }
+}
+
+if (!function_exists('t')) {
+    /**
+     * Admin-editable UI string, keyed and grouped like setting()/Setting — falls back
+     * to $default (and auto-saves it as the English row) the first time a key is used,
+     * so wiring a new string into a view is enough to make it show up for translation
+     * in the admin Translations screen without a manual seed step.
+     */
+    function t(string $key, string $default = '', array $replace = [], ?string $group = null): string
+    {
+        $locale = app()->getLocale();
+        $value = Translation::get($key, $locale, null);
+
+        if ($value === null) {
+            if ($locale !== 'en' && ($enValue = Translation::get($key, 'en', null)) !== null) {
+                $value = $enValue;
+            } else {
+                $value = $default;
+                if ($default !== '') {
+                    Translation::set($key, 'en', $default, $group ?? 'common');
+                }
+            }
+        }
+
+        foreach ($replace as $search => $val) {
+            $value = str_replace(':' . $search, $val, $value);
+        }
+
+        return $value;
+    }
+}
+
+if (!function_exists('active_languages')) {
+    function active_languages(): \Illuminate\Support\Collection
+    {
+        return Language::active();
+    }
+}
+
+if (!function_exists('current_language')) {
+    function current_language(): ?Language
+    {
+        return Language::active()->firstWhere('code', app()->getLocale()) ?? Language::default();
+    }
+}
+
+if (!function_exists('setting_file_url')) {
+    function setting_file_url(string $key, ?string $default = null): ?string
+    {
+        return Setting::fileUrl($key, $default);
+    }
+}
+
+if (!function_exists('normalize_digits')) {
+    /**
+     * Convert Bangla numerals (০-৯) to English digits (0-9), so a customer typing
+     * a phone number in Bangla script still resolves to a usable phone value.
+     */
+    function normalize_digits(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        return strtr($value, [
+            '০' => '0', '১' => '1', '২' => '2', '৩' => '3', '৪' => '4',
+            '৫' => '5', '৬' => '6', '৭' => '7', '৮' => '8', '৯' => '9',
+        ]);
+    }
+}
+
+if (!function_exists('pixel_advanced_matching_data')) {
+    /**
+     * Builds the em/ph/fn/ln(/ct/st/zp/country) payload for Meta's
+     * fbq('init', id, ...) Advanced Matching, and the matching email/phone_number/
+     * address shape for Google's gtag('set', 'user_data', ...) Enhanced Conversions —
+     * from whatever subset of name/email/phone/address is known. Used both for a
+     * logged-in customer's profile (site-wide default, see layouts/app.blade.php)
+     * and an order's shipping details at checkout (richer, and the only source for
+     * guest checkouts — see checkout/success.blade.php). Both platforms hash this
+     * client-side before it's ever sent, so plain values go in here, not hashes.
+     */
+    function pixel_advanced_matching_data(
+        ?string $name = null, ?string $email = null, ?string $phone = null,
+        ?string $city = null, ?string $state = null, ?string $zip = null, ?string $country = null
+    ): array {
+        $fb = [];
+        $google = ['address' => []];
+
+        if ($email) {
+            $email = strtolower(trim($email));
+            $fb['em'] = $email;
+            $google['email'] = $email;
+        }
+        if ($phone) {
+            $digits = preg_replace('/[^0-9]/', '', normalize_digits($phone) ?? '');
+            // Bangladesh-focused store (see normalize_digits above) — local numbers
+            // are typically submitted without a country code; add 880 so both
+            // platforms receive a code-qualified number rather than a bare local one.
+            if ($digits !== '' && !str_starts_with($digits, '880') && strlen($digits) <= 11) {
+                $digits = '880' . ltrim($digits, '0');
+            }
+            if ($digits !== '') {
+                $fb['ph'] = $digits;
+                $google['phone_number'] = '+' . $digits;
+            }
+        }
+        if ($name) {
+            $parts = preg_split('/\s+/', trim($name), 2);
+            $fb['fn'] = strtolower($parts[0]);
+            $google['address']['first_name'] = strtolower($parts[0]);
+            if (!empty($parts[1])) {
+                $fb['ln'] = strtolower($parts[1]);
+                $google['address']['last_name'] = strtolower($parts[1]);
+            }
+        }
+        if ($city)    { $fb['ct'] = strtolower($city); $google['address']['city'] = strtolower($city); }
+        if ($state)   { $fb['st'] = strtolower($state); $google['address']['region'] = strtolower($state); }
+        if ($zip)     { $fb['zp'] = strtolower($zip); $google['address']['postal_code'] = $zip; }
+        if ($country) { $fb['country'] = strtolower($country); $google['address']['country'] = strtolower($country); }
+
+        if (empty($google['address'])) {
+            unset($google['address']);
+        }
+
+        return ['fb' => $fb, 'google' => $google];
+    }
+}
+
+if (!function_exists('bold_markup')) {
+    /**
+     * Lightweight **bold** markdown for plain <input type="text"> fields that need just one
+     * bit of emphasis (e.g. landing page "Who Is This For" rows) without pulling in a full
+     * rich-text editor. Escapes the whole string FIRST, then turns escaped **pairs** into
+     * <strong> — so the only HTML that can ever come out of admin-entered text is <strong>,
+     * never arbitrary markup (a stray "<script>" typed into the field stays inert text).
+     * Render with {!! bold_markup($text) !!}, never plain {{ $text }}.
+     */
+    function bold_markup(?string $text): string
+    {
+        if ($text === null || $text === '') {
+            return '';
+        }
+        return preg_replace('/\*\*(.+?)\*\*/s', '<strong>$1</strong>', e($text));
+    }
+}
+
+if (!function_exists('format_currency')) {
+    function format_currency(float|int $amount): string
+    {
+        $symbol    = html_entity_decode(setting('currency_symbol', '৳'));
+        $position  = setting('currency_position', 'left');
+        $decimals  = (int) setting('decimal_places', 0);
+        $thousands = setting('thousand_separator', ',');
+        $decimal   = setting('decimal_separator', '.');
+        $formatted = number_format((float) $amount, $decimals, $decimal, $thousands);
+        return $position === 'right' ? $formatted . $symbol : $symbol . $formatted;
+    }
+}
+
+if (!function_exists('embed_video_url')) {
+    /**
+     * Landing pages let the admin paste any video link (YouTube share/watch/shorts URL,
+     * Facebook video URL, or a direct .mp4) into a plain text field — this normalizes
+     * whatever they pasted into something actually embeddable in an <iframe>/<video>.
+     * Returns null (caller falls back to a plain "watch" link) for anything unrecognized.
+     */
+    function embed_video_url(?string $url): ?array
+    {
+        if (blank($url)) {
+            return null;
+        }
+
+        if (preg_match('/youtu\.be\/([a-zA-Z0-9_-]+)/', $url, $m) || preg_match('/[?&]v=([a-zA-Z0-9_-]+)/', $url, $m) || preg_match('/youtube\.com\/embed\/([a-zA-Z0-9_-]+)/', $url, $m) || preg_match('/youtube\.com\/shorts\/([a-zA-Z0-9_-]+)/', $url, $m)) {
+            return ['type' => 'iframe', 'src' => 'https://www.youtube.com/embed/' . $m[1]];
+        }
+
+        if (preg_match('/facebook\.com|fb\.watch/', $url)) {
+            return ['type' => 'iframe', 'src' => 'https://www.facebook.com/plugins/video.php?href=' . urlencode($url) . '&show_text=0'];
+        }
+
+        if (preg_match('/\.(mp4|webm|ogg)(\?.*)?$/i', $url)) {
+            return ['type' => 'video', 'src' => $url];
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('hex_to_hsl')) {
+    function hex_to_hsl(string $hex): array
+    {
+        $hex = ltrim($hex, '#');
+        if (strlen($hex) === 3) {
+            $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
+        }
+        if (!preg_match('/^[0-9a-fA-F]{6}$/', $hex)) {
+            $hex = 'ea580c';
+        }
+
+        $r = hexdec(substr($hex, 0, 2)) / 255;
+        $g = hexdec(substr($hex, 2, 2)) / 255;
+        $b = hexdec(substr($hex, 4, 2)) / 255;
+
+        $max = max($r, $g, $b);
+        $min = min($r, $g, $b);
+        $l = ($max + $min) / 2;
+
+        if ($max === $min) {
+            $h = $s = 0.0;
+        } else {
+            $d = $max - $min;
+            $s = $l > 0.5 ? $d / (2 - $max - $min) : $d / ($max + $min);
+            $h = match ($max) {
+                $r => ($g - $b) / $d + ($g < $b ? 6 : 0),
+                $g => ($b - $r) / $d + 2,
+                $b => ($r - $g) / $d + 4,
+                default => 0,
+            };
+            $h /= 6;
+        }
+
+        return [$h * 360, $s * 100, $l * 100];
+    }
+}
+
+if (!function_exists('hsl_to_hex')) {
+    function hsl_to_hex(float $h, float $s, float $l): string
+    {
+        $h = fmod($h, 360) / 360;
+        $s = max(0, min(100, $s)) / 100;
+        $l = max(0, min(100, $l)) / 100;
+
+        if ($s === 0.0) {
+            $r = $g = $b = $l;
+        } else {
+            $q = $l < 0.5 ? $l * (1 + $s) : $l + $s - $l * $s;
+            $p = 2 * $l - $q;
+            $hue2rgb = function ($p, $q, $t) {
+                if ($t < 0) $t += 1;
+                if ($t > 1) $t -= 1;
+                if ($t < 1 / 6) return $p + ($q - $p) * 6 * $t;
+                if ($t < 1 / 2) return $q;
+                if ($t < 2 / 3) return $p + ($q - $p) * (2 / 3 - $t) * 6;
+                return $p;
+            };
+            $r = $hue2rgb($p, $q, $h + 1 / 3);
+            $g = $hue2rgb($p, $q, $h);
+            $b = $hue2rgb($p, $q, $h - 1 / 3);
+        }
+
+        $toHex = fn ($c) => str_pad(dechex((int) round($c * 255)), 2, '0', STR_PAD_LEFT);
+        return '#' . $toHex($r) . $toHex($g) . $toHex($b);
+    }
+}
+
+if (!function_exists('wrap_branded_email')) {
+    /**
+     * Wrap a raw notification/campaign email body with the admin-configured Email Logo
+     * (falling back to the Main Logo, then the site name as text) plus a simple footer,
+     * so outgoing emails aren't just an unbranded snippet of HTML.
+     */
+    function wrap_branded_email(string $bodyHtml, ?string $footerExtra = null): string
+    {
+        $siteName = setting('site_name', 'ShopVista');
+        $logoUrl  = setting_file_url('email_logo', setting_file_url('site_logo'));
+
+        $logoHtml = $logoUrl
+            ? '<img src="' . e($logoUrl) . '" alt="' . e($siteName) . '" style="max-height:48px;">'
+            : '<span style="font-size:20px;font-weight:bold;color:#1f2937;">' . e($siteName) . '</span>';
+
+        return '<div style="max-width:600px;margin:0 auto;font-family:sans-serif;">'
+            . '<div style="padding:24px 0;text-align:center;border-bottom:1px solid #e5e7eb;">' . $logoHtml . '</div>'
+            . '<div style="padding:24px 0;">' . $bodyHtml . '</div>'
+            . '<div style="padding:16px 0;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;">'
+            . '&copy; ' . date('Y') . ' ' . e($siteName) . '. All rights reserved.'
+            . ($footerExtra ? '<br>' . $footerExtra : '')
+            . '</div>'
+            . '</div>';
+    }
+}
+
+if (!function_exists('brand_color_shades')) {
+    /**
+     * Generate a Tailwind-style 50–900 shade ramp from a single brand color,
+     * so one admin-picked hex can re-theme every "orange-500", "orange-600", etc.
+     * utility class already hardcoded throughout the storefront.
+     */
+    function brand_color_shades(string $hex): array
+    {
+        [$h, $s] = hex_to_hsl($hex);
+
+        $lightnessCurve = [
+            '50' => 97, '100' => 93, '200' => 85, '300' => 74,
+            '400' => 62, '500' => 53, '600' => 45, '700' => 38,
+            '800' => 31, '900' => 24,
+        ];
+
+        $shades = [];
+        foreach ($lightnessCurve as $step => $lightness) {
+            $stepSaturation = $lightness > 90 ? max($s * 0.7, 20) : $s;
+            $shades[$step] = hsl_to_hex($h, $stepSaturation, $lightness);
+        }
+
+        return $shades;
+    }
+}

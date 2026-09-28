@@ -1,0 +1,117 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
+
+class LandingPage extends Model
+{
+    protected $fillable = [
+        'title', 'slug', 'product_id', 'status',
+        'hero_heading', 'hero_subheading', 'hero_image', 'content',
+        'price_override',
+        'header_logo', 'favicon', 'order_button_text', 'brand_color',
+        // Pixel tracking — per-page override of the site-wide Facebook Pixel / Google
+        // Analytics / Google Ads settings, for campaigns that need their own ad-account pixel.
+        'fb_pixel_id', 'ga_measurement_id', 'google_ads_conversion_id', 'google_ads_conversion_label',
+        'collect_address', 'require_address', 'order_form_fields',
+        'thank_you_heading', 'thank_you_message', 'thank_you_redirect_url', 'thank_you_button_text',
+        'meta_title', 'meta_description', 'og_image',
+        'views_count',
+        // Urgency bar
+        'urgency_bar_enabled', 'urgency_bar_text', 'urgency_bar_minutes', 'urgency_bar_seconds',
+        // Rating line + trust badges
+        'rating_value', 'rating_count', 'trust_badges',
+        // How it works video
+        'how_it_works_heading', 'how_it_works_video',
+        // Benefits grid
+        'benefits_heading', 'benefits',
+        // Who is this for
+        'who_for_heading', 'who_for',
+        // Testimonials
+        'testimonials_heading', 'testimonial_videos', 'testimonial_images',
+        // Pricing / offer box
+        'offer_badge_text', 'pricing_items', 'compare_at_price',
+        // FAQ
+        'faqs_heading', 'faqs',
+        // Certificates
+        'certificates_heading', 'certificates_subheading', 'certificates',
+        // Delivery zones (shipping charge picker on the order form)
+        'delivery_zones',
+    ];
+
+    protected $casts = [
+        'collect_address'      => 'boolean',
+        'require_address'      => 'boolean',
+        'order_form_fields'    => 'array',
+        'price_override'       => 'decimal:2',
+        'urgency_bar_enabled'  => 'boolean',
+        'urgency_bar_minutes'  => 'integer',
+        'urgency_bar_seconds'  => 'integer',
+        'rating_value'         => 'decimal:1',
+        'rating_count'         => 'integer',
+        'trust_badges'         => 'array',
+        'benefits'             => 'array',
+        'who_for'              => 'array',
+        'testimonial_videos'   => 'array',
+        'testimonial_images'   => 'array',
+        'pricing_items'        => 'array',
+        'compare_at_price'     => 'decimal:2',
+        'faqs'                 => 'array',
+        'certificates'         => 'array',
+        'delivery_zones'       => 'array',
+    ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::creating(function ($m) {
+            if (empty($m->slug)) {
+                $m->slug = Str::slug($m->title);
+            }
+        });
+    }
+
+    // Sanitized on write, not read — same reasoning as Page::content (rendered unescaped
+    // with {!! !!} in landing/show.blade.php, so the stored HTML must already be safe).
+    public function setContentAttribute($value)
+    {
+        $this->attributes['content'] = $value !== null ? clean($value, 'rich_content') : $value;
+    }
+
+    public function product()
+    {
+        return $this->belongsTo(Product::class);
+    }
+
+    public function orders()
+    {
+        return $this->hasMany(Order::class);
+    }
+
+    public function scopePublished($query)
+    {
+        return $query->where('status', 'published');
+    }
+
+    public function getRouteKeyName(): string
+    {
+        return 'slug';
+    }
+
+    /**
+     * What actually shows on the page and gets charged — price_override if the admin set
+     * one, otherwise whatever the linked product's own final price is right now (so a
+     * flash sale on the linked product is reflected here too), otherwise null (no price
+     * — e.g. a lead-gen landing page with no product/price at all).
+     */
+    public function getEffectivePriceAttribute(): ?float
+    {
+        if ($this->price_override !== null) {
+            return (float) $this->price_override;
+        }
+
+        return $this->product?->final_price;
+    }
+}

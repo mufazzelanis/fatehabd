@@ -1,0 +1,213 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Models\Category;
+use App\Support\ImageOptimizer;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+
+class CategoryController extends Controller
+{
+    public function index()
+    {
+        // Paginated by TOP-LEVEL category (not raw row count) so a parent and all its
+        // children always land on the same page together, and both levels genuinely
+        // respect sort_order — the previous COALESCE(parent_id, id) grouping ordered
+        // top-level rows by their own id underneath the hood (always unique, so
+        // sort_order never got a chance to reorder them), which is why move up/down
+        // visibly did nothing for any category that had subcategories.
+        $topLevel = Category::whereNull('parent_id')
+            ->withCount(['products', 'children'])
+            ->with([
+                'vendor:id,business_name',
+                'children' => fn ($q) => $q->withCount('products')->with('vendor:id,business_name')->orderBy('sort_order')->orderBy('name'),
+            ])
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->paginate(50);
+
+        // Categories in this app only nest one level deep (no sub-subcategories), so
+        // every flattened child row simply gets children_count = 0 — no lazy-load risk.
+        // Each child's `parent` relation is set from the already-loaded $parent instead
+        // of letting the view's `$category->parent` access trigger a lazy query per row.
+        $categories = $topLevel->getCollection()->flatMap(function ($parent) {
+            $parent->children->each(function ($child) use ($parent) {
+                $child->children_count = 0;
+                $child->setRelation('parent', $parent);
+            });
+            return collect([$parent])->merge($parent->children);
+        });
+
+        $topLevel->setCollection($categories);
+
+        return view('admin.categories.index', ['categories' => $topLevel]);
+    }
+
+    public function create()
+    {
+        $parents = Category::whereNull('parent_id')->get();
+        return view('admin.categories.create', compact('parents'));
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name'      => 'required|string|max:255|unique:categories',
+            'slug'      => 'nullable|string|unique:categories',
+            'image'     => 'nullable|image|max:2048',
+            'og_image'  => 'nullable|image|max:2048',
+            'parent_id' => 'nullable|exists:categories,id',
+        ]);
+
+        $data = $request->only([
+            'name', 'slug', 'description', 'parent_id', 'sort_order', 'is_active',
+            'meta_title', 'meta_description', 'meta_keywords', 'canonical_url',
+            'robots_meta', 'redirect_url',
+        ]);
+        $data['slug'] = $data['slug'] ?? Str::slug($data['name']);
+        $data['is_active'] = $request->boolean('is_active', true);
+        $data['noindex'] = $request->boolean('noindex');
+        $data['nofollow'] = $request->boolean('nofollow');
+        $data['nosnippet'] = $request->boolean('nosnippet');
+        $data['noimageindex'] = $request->boolean('noimageindex');
+
+        if ($request->hasFile('image')) {
+            $data['image'] = ImageOptimizer::store($request->file('image'), 'categories', 'public', 800);
+        }
+        if ($request->hasFile('og_image')) {
+            $data['og_image'] = ImageOptimizer::store($request->file('og_image'), 'categories', 'public', 1200);
+        }
+
+        Category::create($data);
+        return redirect()->route('admin.categories.index')->with('success', 'Category created successfully.');
+    }
+
+    public function edit(Category $category)
+    {
+        $parents = Category::whereNull('parent_id')->where('id', '!=', $category->id)->get();
+        return view('admin.categories.edit', compact('category', 'parents'));
+    }
+
+    public function update(Request $request, Category $category)
+    {
+        $request->validate([
+            'name'  => 'required|string|max:255|unique:categories,name,' . $category->id,
+            'slug'  => 'nullable|string|unique:categories,slug,' . $category->id,
+            'image' => 'nullable|image|max:2048',
+            'og_image' => 'nullable|image|max:2048',
+            'parent_id' => ['nullable', 'exists:categories,id', Rule::notIn([$category->id])],
+        ]);
+
+        // Categories only nest one level deep — a category that already has its own
+        // subcategories can't itself become someone else's subcategory (that would
+        // silently turn its children into orphaned sub-subcategories).
+        if ($request->filled('parent_id') && $category->children()->exists()) {
+            return back()->withInput()->with('error', 'This category has its own subcategories — reassign or remove them first before moving it under another category.');
+        }
+
+        $data = $request->only([
+            'name', 'slug', 'description', 'parent_id', 'sort_order',
+            'meta_title', 'meta_description', 'meta_keywords', 'canonical_url',
+            'robots_meta', 'redirect_url',
+        ]);
+        $data['slug'] = $data['slug'] ?? Str::slug($data['name']);
+        $data['is_active'] = $request->boolean('is_active');
+        $data['noindex'] = $request->boolean('noindex');
+        $data['nofollow'] = $request->boolean('nofollow');
+        $data['nosnippet'] = $request->boolean('nosnippet');
+        $data['noimageindex'] = $request->boolean('noimageindex');
+
+        if ($request->hasFile('image')) {
+            $data['image'] = ImageOptimizer::store($request->file('image'), 'categories', 'public', 800);
+        }
+        if ($request->hasFile('og_image')) {
+            $data['og_image'] = ImageOptimizer::store($request->file('og_image'), 'categories', 'public', 1200);
+        }
+
+        $category->update($data);
+        return redirect()->route('admin.categories.index')->with('success', 'Category updated successfully.');
+    }
+
+    public function destroy(Category $category)
+    {
+        if ($category->products()->exists()) {
+            return back()->with('error', 'Cannot delete category with existing products. Reassign or remove them first.');
+        }
+        if ($category->children()->exists()) {
+            return back()->with('error', 'Cannot delete category with subcategories. Remove or reassign them first.');
+        }
+
+        $category->delete();
+        return redirect()->route('admin.categories.index')->with('success', 'Category deleted.');
+    }
+
+    public function show(Category $category)
+    {
+        return redirect()->route('admin.categories.edit', $category);
+    }
+
+    public function approve(Category $category)
+    {
+        $category->update(['approval_status' => 'approved', 'is_active' => true, 'rejection_reason' => null]);
+
+        return back()->with('success', 'Category approved and is now available.');
+    }
+
+    public function reject(Request $request, Category $category)
+    {
+        $request->validate(['rejection_reason' => 'required|string|max:255']);
+
+        $category->update([
+            'approval_status' => 'rejected',
+            'is_active' => false,
+            'rejection_reason' => $request->rejection_reason,
+        ]);
+
+        return back()->with('success', 'Category rejected.');
+    }
+
+    public function moveUp(Category $category)
+    {
+        $this->swapWithNeighbor($category, 'up');
+        return back();
+    }
+
+    public function moveDown(Category $category)
+    {
+        $this->swapWithNeighbor($category, 'down');
+        return back();
+    }
+
+    /**
+     * Scoped by parent_id — top-level categories (the horizontal nav bar) and each
+     * parent's own subcategories reorder independently of one another, since they
+     * render as separate lists on the frontend, not one combined sequence.
+     */
+    private function swapWithNeighbor(Category $category, string $direction): void
+    {
+        $siblings = Category::where('parent_id', $category->parent_id)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
+
+        $index = $siblings->search(fn ($s) => $s->id === $category->id);
+
+        if ($index === false) {
+            return;
+        }
+
+        $swapIndex = $direction === 'up' ? $index - 1 : $index + 1;
+
+        if ($swapIndex < 0 || $swapIndex >= $siblings->count()) {
+            return;
+        }
+
+        $neighbor = $siblings[$swapIndex];
+
+        $category->update(['sort_order' => $swapIndex]);
+        $neighbor->update(['sort_order' => $index]);
+    }
+}
