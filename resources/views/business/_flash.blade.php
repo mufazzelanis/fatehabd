@@ -1,0 +1,2 @@
+@if(session('success'))<div class="mb-4 rounded-xl border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/40 px-4 py-3 text-sm text-green-700 dark:text-green-400">{{ session('success') }}</div>@endif
+@if(session('error'))<div class="mb-4 rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700 dark:text-red-400">{{ session('error') }}</div>@endif

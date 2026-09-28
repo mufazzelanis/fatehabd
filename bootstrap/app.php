@@ -2,6 +2,7 @@
 
 use App\Listeners\RecordLoginActivityListener;
 use App\Http\Middleware\AdminMiddleware;
+use App\Http\Middleware\DealerMiddleware;
 use App\Http\Middleware\ForceHttps;
 use App\Http\Middleware\MaintenanceMode;
 use App\Http\Middleware\PermissionMiddleware;
@@ -27,6 +28,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => AdminMiddleware::class,
             'permission' => PermissionMiddleware::class,
             'vendor' => VendorMiddleware::class,
+            'dealer' => DealerMiddleware::class,
             'record-login' => RecordLoginActivity::class,
         ]);
         $middleware->web(prepend: [ForceHttps::class]);

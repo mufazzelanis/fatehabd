@@ -44,6 +44,7 @@
     RewriteCond %{HTTP_REFERER} !^https?://(www\.)?mitavin\.a-haque\.com [NC]
     RewriteCond %{HTTP_REFERER} !^https?://(www\.)?completeecom\.test [NC]
     RewriteCond %{HTTP_REFERER} !^https?://(www\.)?fatehabd\.com [NC]
+    RewriteCond %{HTTP_REFERER} !^https?://(localhost|127\.0\.0\.1)(:\d+)?(/|$) [NC]
     RewriteRule \.(jpe?g|png|gif|webp|svg)$ - [F,NC,L]
 </IfModule>
 

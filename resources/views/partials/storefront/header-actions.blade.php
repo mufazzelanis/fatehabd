@@ -56,6 +56,13 @@
     </a>
     @endauth
 
+    {{-- Business (dealer panel) --}}
+    <a href="{{ auth('dealer')->check() ? route('business.dashboard') : route('business.login') }}"
+       class="hidden md:flex items-center gap-1.5 text-gray-600 dark:text-gray-300 hover:text-orange-700 font-medium text-sm px-3 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        {{ t('header.business', 'Business', [], 'header') }}
+    </a>
+
     {{-- User Menu --}}
     @auth
         <div class="relative hidden md:block" x-data="{ open: false }">

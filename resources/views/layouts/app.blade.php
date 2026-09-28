@@ -633,6 +633,10 @@ $navCategories = \App\Models\Category::with(['children' => fn($q) => $q->active(
                     <a href="{{ route('login') }}" class="block px-3 py-2.5 text-sm text-orange-600 font-medium hover:bg-orange-50 dark:hover:bg-gray-800 rounded-lg transition">{{ t('header.login', 'Login', [], 'header') }}</a>
                     <a href="{{ route('register') }}" class="block px-3 py-2.5 text-sm text-white bg-orange-500 text-center font-medium rounded-lg hover:bg-orange-600 transition">{{ t('header.signup', 'Sign Up', [], 'header') }}</a>
                 @endauth
+                <a href="{{ auth('dealer')->check() ? route('business.dashboard') : route('business.login') }}" class="flex items-center gap-2 px-3 py-2.5 mt-1 text-sm text-gray-700 dark:text-gray-200 font-medium border border-gray-200 dark:border-gray-700 hover:bg-orange-50 dark:hover:bg-gray-800 hover:text-orange-600 rounded-lg transition">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    {{ t('header.business', 'Business', [], 'header') }}
+                </a>
             </nav>
         </div>
     </div>

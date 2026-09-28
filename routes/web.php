@@ -52,6 +52,12 @@ use App\Http\Controllers\Admin\StockReasonController as AdminStockReasonControll
 use App\Http\Controllers\Admin\StockTransferController as AdminStockTransferController;
 use App\Http\Controllers\Admin\SubcategoryController as AdminSubcategoryController;
 use App\Http\Controllers\Admin\SupplierController as AdminSupplierController;
+use App\Http\Controllers\Admin\LocationController as AdminLocationController;
+use App\Http\Controllers\Admin\DealerController as AdminDealerController;
+use App\Http\Controllers\Admin\DealerTargetController as AdminDealerTargetController;
+use App\Http\Controllers\Admin\BusinessDashboardController as AdminBusinessDashboardController;
+use App\Http\Controllers\Business\AuthController as BusinessAuthController;
+use App\Http\Controllers\Business\DashboardController as BusinessDashboardController;
 use App\Http\Controllers\Admin\TagController as AdminTagController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Admin\VendorController as AdminVendorController;
@@ -254,6 +260,24 @@ Route::middleware('auth')->group(function () {
     });
 });
 
+// Business (dealership) panel — separate `dealer` guard, phone + password login
+Route::prefix('business')->name('business.')->group(function () {
+    Route::get('login', [BusinessAuthController::class, 'showLogin'])->name('login');
+    Route::post('login', [BusinessAuthController::class, 'login'])->middleware('throttle:20,1')->name('login.store');
+    Route::get('register', [BusinessAuthController::class, 'showRegister'])->name('register');
+    Route::post('register', [BusinessAuthController::class, 'register'])->middleware('throttle:10,1')->name('register.store');
+    Route::get('locations/districts/{district}/thanas', [BusinessAuthController::class, 'thanas'])->name('locations.thanas');
+    Route::get('locations/thanas/{thana}/unions', [BusinessAuthController::class, 'unions'])->name('locations.unions');
+
+    Route::middleware('dealer')->group(function () {
+        Route::get('/', [BusinessDashboardController::class, 'index'])->name('dashboard');
+        Route::post('logout', [BusinessAuthController::class, 'logout'])->name('logout');
+        Route::post('targets/{subordinate}', [BusinessDashboardController::class, 'setTarget'])->name('targets.set');
+        Route::get('union-dealers/create', [BusinessDashboardController::class, 'createUnionDealer'])->name('union-dealers.create');
+        Route::post('union-dealers', [BusinessDashboardController::class, 'storeUnionDealer'])->name('union-dealers.store');
+    });
+});
+
 // Admin Routes
 Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin'])->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
@@ -354,6 +378,38 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin'])->group(fun
     Route::post('vendors/{vendor}/reject-profile', [AdminVendorController::class, 'rejectProfile'])->name('vendors.reject-profile');
     Route::get('vendors/{vendor}/document/{field}', [AdminVendorController::class, 'document'])->name('vendors.document');
     Route::get('vendor-payments', [AdminVendorPaymentController::class, 'index'])->name('vendor-payments.index');
+
+    // Business (dealership) — District → Thana → Union locations
+    Route::middleware('permission:business.manage')->prefix('business/locations')->name('business.locations.')->group(function () {
+        Route::get('/', [AdminLocationController::class, 'index'])->name('index');
+        Route::get('districts/{district}', [AdminLocationController::class, 'district'])->name('district');
+        Route::put('districts/{district}', [AdminLocationController::class, 'updateDistrict'])->name('district.update');
+        Route::post('districts/{district}/thanas', [AdminLocationController::class, 'storeThana'])->name('thana.store');
+        Route::get('thanas/{thana}', [AdminLocationController::class, 'thana'])->name('thana');
+        Route::put('thanas/{thana}', [AdminLocationController::class, 'updateThana'])->name('thana.update');
+        Route::delete('thanas/{thana}', [AdminLocationController::class, 'destroyThana'])->name('thana.destroy');
+        Route::post('thanas/{thana}/unions', [AdminLocationController::class, 'storeUnion'])->name('union.store');
+        Route::put('unions/{union}', [AdminLocationController::class, 'updateUnion'])->name('union.update');
+        Route::delete('unions/{union}', [AdminLocationController::class, 'destroyUnion'])->name('union.destroy');
+    });
+
+    // Business — dealers, monthly targets & settlement, dashboard
+    Route::middleware('permission:business.manage')->prefix('business')->name('business.')->group(function () {
+        Route::get('dashboard', [AdminBusinessDashboardController::class, 'index'])->name('dashboard');
+
+        Route::resource('dealers', AdminDealerController::class);
+        Route::post('dealers/{dealer}/approve', [AdminDealerController::class, 'approve'])->name('dealers.approve');
+        Route::post('dealers/{dealer}/reject', [AdminDealerController::class, 'reject'])->name('dealers.reject');
+        Route::post('dealers/{dealer}/suspend', [AdminDealerController::class, 'suspend'])->name('dealers.suspend');
+        Route::post('dealers/{dealer}/activate', [AdminDealerController::class, 'activate'])->name('dealers.activate');
+        Route::get('dealers/{dealer}/document/{field}', [AdminDealerController::class, 'document'])->name('dealers.document');
+
+        Route::get('targets', [AdminDealerTargetController::class, 'index'])->name('targets.index');
+        Route::post('targets/copy-previous', [AdminDealerTargetController::class, 'copyPrevious'])->name('targets.copy-previous');
+        Route::post('targets/dealer/{dealer}', [AdminDealerTargetController::class, 'save'])->name('targets.save');
+        Route::post('targets/{target}/settle', [AdminDealerTargetController::class, 'settle'])->name('targets.settle');
+        Route::post('targets/{target}/unsettle', [AdminDealerTargetController::class, 'unsettle'])->name('targets.unsettle');
+    });
 
     // Suppliers
     Route::resource('suppliers', AdminSupplierController::class)->except(['show']);

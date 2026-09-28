@@ -42,6 +42,12 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // Dealership ("Business") accounts — phone + password at /business/login
+        'dealer' => [
+            'driver' => 'session',
+            'provider' => 'dealers',
+        ],
     ],
 
     /*
@@ -65,6 +71,11 @@ return [
         'users' => [
             'driver' => 'eloquent',
             'model' => env('AUTH_MODEL', User::class),
+        ],
+
+        'dealers' => [
+            'driver' => 'eloquent',
+            'model' => App\Models\Dealer::class,
         ],
 
         // 'users' => [
